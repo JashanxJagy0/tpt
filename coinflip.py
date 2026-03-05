@@ -177,9 +177,9 @@ async def coin_side_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coin_accept_friend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer("Match accepted!")
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("Match accepted!")
     cd      = context.user_data
     creator = cd["coin_creator_id"], cd["coin_creator_name"]
     friend  = q.from_user
@@ -202,9 +202,9 @@ async def coin_accept_friend_handler(update: Update, context: ContextTypes.DEFAU
 
 async def coin_accept_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer("Playing vs Bot!")
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("Playing vs Bot!")
     cd      = context.user_data
 
     cd["coin_opponent_id"]   = None
@@ -223,9 +223,9 @@ async def coin_accept_bot_handler(update: Update, context: ContextTypes.DEFAULT_
 
 async def coin_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer("Canceled.")
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("Canceled.")
     await q.delete_message()
 
 
@@ -302,6 +302,6 @@ async def coin_flip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coin_verify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer("Verification not implemented.", show_alert=True)
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("Verification not implemented.", show_alert=True)

@@ -145,9 +145,10 @@ async def wheel_play_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ─── ½ Bet ────────────────────────────────────────────────────────────────────
 
 async def wheel_half_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query; await q.answer("½ Bet")
+    q   = update.callback_query
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("½ Bet")
     uid = q.from_user.id; bal = _get_balance(uid)
     bet = bal / 2
     context.user_data["wheel_bet"] = round(bet, 2)
@@ -158,9 +159,10 @@ async def wheel_half_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ─── 2× Bet ───────────────────────────────────────────────────────────────────
 
 async def wheel_double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query; await q.answer("2× Bet")
+    q   = update.callback_query
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("2× Bet")
     uid = q.from_user.id; bal = _get_balance(uid)
     prev = context.user_data.get("wheel_bet", 0.0)
     bet  = min(bal, prev * 2)
@@ -232,9 +234,10 @@ async def wheel_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─── 🔍 Verify (placeholder) ───────────────────────────────────────────────────
 
 async def wheel_verify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer("Verification not implemented", show_alert=True)
+    q = update.callback_query
     if not await check_owner(q, "❌ This is not your game."):
         return
+    await q.answer("Verification not implemented", show_alert=True)
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
