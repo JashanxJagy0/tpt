@@ -10,6 +10,8 @@ from models import (
     update_stats,
 )
 from referral import track_referral_event
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -109,10 +111,11 @@ async def wheel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if bet > 0:
         header, kb = build_bet_kb(bet, bal)
-        await update.message.reply_text(header, parse_mode="Markdown", reply_markup=kb)
+        msg = await update.message.reply_text(header, parse_mode="Markdown", reply_markup=kb)
+        set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
     else:
         # Intro card (no bet)
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "🎡 *Wheel of Fortune*\n\n"
             "Classic wheel of fortune – spin and collect multipliers for your bet.\n\n"
             "To quickly start the game, type `/wheel <bet>`\n\n"
@@ -123,11 +126,14 @@ async def wheel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=build_intro_kb()
         )
+        set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
 # ─── ▶️ Play ──────────────────────────────────────────────────────────────────
 
 async def wheel_play_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     uid = q.from_user.id
     bal = _get_balance(uid)
     bet = context.user_data.get("wheel_bet", 0.0) or min(1.0, bal)
@@ -139,7 +145,10 @@ async def wheel_play_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ─── ½ Bet ────────────────────────────────────────────────────────────────────
 
 async def wheel_half_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query; await q.answer("½ Bet")
+    q   = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+    await q.answer("½ Bet")
     uid = q.from_user.id; bal = _get_balance(uid)
     bet = bal / 2
     context.user_data["wheel_bet"] = round(bet, 2)
@@ -150,7 +159,10 @@ async def wheel_half_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ─── 2× Bet ───────────────────────────────────────────────────────────────────
 
 async def wheel_double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query; await q.answer("2× Bet")
+    q   = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+    await q.answer("2× Bet")
     uid = q.from_user.id; bal = _get_balance(uid)
     prev = context.user_data.get("wheel_bet", 0.0)
     bet  = min(bal, prev * 2)
@@ -163,12 +175,16 @@ async def wheel_double_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def wheel_back_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     await wheel_command(q, context)
 
 # ─── ▶️ Spin ─────────────────────────────────────────────────────────────────
 
 async def wheel_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     uid = q.from_user.id
     bet = context.user_data.get("wheel_bet", 0.0)
     bal = _get_balance(uid)
@@ -189,10 +205,12 @@ async def wheel_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         update_balance(uid, payout)
         log_transaction(uid, "wheel_win", payout, f"×{mult:.2f}")
         update_stats(uid, True)
+        adjust_house_balance(-payout, user_id=uid, reason="wheel_player_win", game_ref="wheel")
         result_text = f"🎉 You won ${payout:.2f} (×{mult:.2f})!"
         is_win = 1
     else:
         update_stats(uid, False)
+        adjust_house_balance(bet, user_id=uid, reason="wheel_player_loss", game_ref="wheel")
         result_text = "😢 You lost."
         is_win = 0
 
@@ -205,17 +223,21 @@ async def wheel_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     # now show the final result card in the exact layout
     new_bal = _get_balance(uid)
     header, kb = build_bet_kb(bet, new_bal, result_text)
-    await context.bot.send_message(
+    result_msg = await context.bot.send_message(
         chat_id=q.message.chat_id,
         text=header,
         parse_mode="Markdown",
         reply_markup=kb
     )
+    set_owner(result_msg.chat_id, result_msg.message_id, uid)
 
 # ─── 🔍 Verify (placeholder) ───────────────────────────────────────────────────
 
 async def wheel_verify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer("Verification not implemented", show_alert=True)
+    q = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+    await q.answer("Verification not implemented", show_alert=True)
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 

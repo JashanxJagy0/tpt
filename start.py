@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppI
 from telegram.ext import ContextTypes
 from models import get_balance
 from bonus import bonus_menu  # existing bonus menu
+from owner_guard import set_owner, check_owner
 
 # ===== Helper: Get LTC/USD Rate =====
 def get_ltc_usd_rate():
@@ -53,12 +54,13 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, bal
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
-        await context.bot.send_message(
+        msg = await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=menu_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
 # ===== /start Command =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,6 +107,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def play_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your menu."):
+        return
     text = "🎮 <b>Game Menu</b>\nChoose the game you want to play:"
 
     kb = [
@@ -126,6 +130,8 @@ async def play_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def more_content_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your menu."):
+        return
     text = "📚 <b>More Content</b>"
     kb = [
         [
@@ -142,6 +148,8 @@ async def more_content_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def deposit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your menu."):
+        return
     text = "💳 <b>Deposit</b>\nChoose your preferred deposit method:"
     kb = [
         [InlineKeyboardButton("Litecoin", callback_data="dep_ltc")],
@@ -161,6 +169,8 @@ async def deposit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your menu."):
+        return
     text = (
         "🐒 <b>Litecoin withdrawal</b>\n\n"
         "Note:\n"
@@ -174,4 +184,7 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== Back Button =====p
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q and not await check_owner(q, "❌ This is not your menu."):
+        return
     await send_main_menu(update, context)

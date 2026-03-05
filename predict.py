@@ -8,6 +8,8 @@ from telegram.ext import ContextTypes
 # —— Hook in your real balance + stats functions here —— #
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # —— Configuration —— #
 HOUSE_EDGE  = 4.0
@@ -103,7 +105,8 @@ async def _show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         await q.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
     else:
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        msg = await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
 async def _show_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data
@@ -118,7 +121,8 @@ async def _show_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         await q.edit_message_text(header, parse_mode="HTML", reply_markup=kb)
     else:
-        await update.message.reply_text(header, parse_mode="HTML", reply_markup=kb)
+        msg = await update.message.reply_text(header, parse_mode="HTML", reply_markup=kb)
+        set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = get_balance(update.effective_user.id)
@@ -145,6 +149,8 @@ async def predict_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kind, arg = q.data.split(":", 1)
     st       = context.user_data
     await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
 
     # ─── Action Buttons ─────────────────────────────── #
     if kind == "predict_action":
@@ -193,6 +199,9 @@ async def predict_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payout  = round(bet * mult, 2) if res in picks else 0.0
             if res in picks:
                 update_balance(user.id, payout)
+                adjust_house_balance(-payout, user_id=user.id, reason="predict_player_win", game_ref="predict")
+            else:
+                adjust_house_balance(bet, user_id=user.id, reason="predict_player_loss", game_ref="predict")
 
             conn = get_connection()
             cur  = conn.cursor()
@@ -228,7 +237,8 @@ async def predict_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             st.update({"mode_index":0, "picks":[], "bet":DEFAULT_BET})
             header = build_header(user.id, st)
             kb     = build_game_keyboard(st)
-            await q.message.chat.send_message(header, parse_mode="HTML", reply_markup=kb)
+            fresh_msg = await q.message.chat.send_message(header, parse_mode="HTML", reply_markup=kb)
+            set_owner(fresh_msg.chat_id, fresh_msg.message_id, user.id)
             return
 
     # ─── Mode ← → ──────────────────────────────────── #

@@ -21,6 +21,8 @@ from telegram.ext import (
 
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─────────────────────────────────────────────────────────────────────────────
 #                             Helper‐Bot Setup
@@ -205,6 +207,7 @@ async def bowl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_mode_keyboard()
     )
     bowl_games[user.id]["msg_id"] = sent.message_id
+    set_owner(sent.chat_id, sent.message_id, user.id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -212,6 +215,8 @@ async def bowl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user  = q.from_user
     data  = q.data.split(":", 1)[1]  # e.g., "bowl_mode:normal" -> "mode:normal"
     # if pattern is "bowl_mode:normal", we want the second part after "bowl_mode:"
@@ -253,6 +258,8 @@ async def bowl_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user  = q.from_user
     pts   = int(q.data.split(":", 1)[1])  # "bowl_points:3" -> "3"
     state = bowl_games.get(user.id)
@@ -284,6 +291,8 @@ async def bowl_points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user   = q.from_user
     choice = q.data.split(":", 1)[1]  # "yes"
     state  = bowl_games.get(user.id)
@@ -343,6 +352,8 @@ async def bowl_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_accept_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user   = q.from_user
     choice = q.data.split(":", 1)[1]  # "yes" or "bot"
     state  = bowl_games.get(user.id)
@@ -528,6 +539,9 @@ async def handle_user_bowls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_wager(uid, state["bet"])
         if winner == "user":
             update_balance(uid, payout)
+            adjust_house_balance(-payout, user_id=uid, reason="bowling_player_win", game_ref="bowling")
+        else:
+            adjust_house_balance(state["bet"], user_id=uid, reason="bowling_player_loss", game_ref="bowling")
 
         save_session(
             uid,
@@ -552,14 +566,15 @@ async def handle_user_bowls(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = f"🤖 Bot wins <b>${bot_win_amt:.2f}</b>!"
             end_amt = bot_win_amt
 
-        await context.bot.send_message(
+        end_msg = await context.bot.send_message(
             chat_id=state["chat_id"],
             text=header + body,
             parse_mode="HTML",
             reply_to_message_id=state.get("last_user_bowl_msg_id"),
             reply_markup=build_end_keyboard(state["bet"], end_amt)
         )
-
+        set_owner(end_msg.chat_id, end_msg.message_id, uid)
+        remove_owner(state["chat_id"], state["msg_id"])
         del bowl_games[uid]
         return
 
@@ -628,6 +643,8 @@ async def handle_user_bowls(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     uid   = q.from_user.id
     state = bowl_games.get(uid)
     if not state or state["stage"] != "playing":
@@ -662,6 +679,7 @@ async def bowl_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         update_balance(uid, -state["bet"])
         update_balance(uid, cash)
         add_wager(uid, state["bet"])
+        adjust_house_balance(state["bet"] - cash, user_id=uid, reason="bowling_cashout", game_ref="bowling")
         save_session(
             uid,
             f"{state['mode']}_{state['to_win']}_cashout",
@@ -694,12 +712,16 @@ async def bowl_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     bet = float(q.data.split(":", 1)[1])
     context.args = [str(bet)]
     await bowl_command(update, context)
 
 async def bowl_double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     payout = float(q.data.split(":", 1)[1])
     context.args = [str(payout)]
     await bowl_command(update, context)
@@ -709,6 +731,8 @@ async def bowl_double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────────────────────────────────────
 async def bowl_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     if user.id in bowl_games:
         del bowl_games[user.id]

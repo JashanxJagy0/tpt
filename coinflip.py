@@ -14,6 +14,8 @@ from models import (
     update_stats,
 )
 from referral import track_referral_event
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -124,11 +126,12 @@ async def coin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["coin_creator_name"] = user.first_name
 
         # immediately ask for side (Image 2)
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             f"🪙 *{user.first_name}*, choose the coin side:",
             parse_mode="Markdown",
             reply_markup=build_side_kb()
         )
+        set_owner(msg.chat_id, msg.message_id, user.id)
     else:
         # show intro card (Image 1)
         await update.message.reply_text(
@@ -148,6 +151,8 @@ async def coin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def coin_side_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     side = q.data.split(":", 1)[1]
     context.user_data["coin_side"] = side
 
@@ -172,6 +177,8 @@ async def coin_side_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coin_accept_friend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     await q.answer("Match accepted!")
     cd      = context.user_data
     creator = cd["coin_creator_id"], cd["coin_creator_name"]
@@ -195,6 +202,8 @@ async def coin_accept_friend_handler(update: Update, context: ContextTypes.DEFAU
 
 async def coin_accept_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     await q.answer("Playing vs Bot!")
     cd      = context.user_data
 
@@ -214,6 +223,8 @@ async def coin_accept_bot_handler(update: Update, context: ContextTypes.DEFAULT_
 
 async def coin_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     await q.answer("Canceled.")
     await q.delete_message()
 
@@ -226,6 +237,8 @@ def build_flipped_kb():
 async def coin_flip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
 
     cd = context.user_data
 
@@ -260,8 +273,10 @@ async def coin_flip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_balance(user_id, payout)
         log_transaction(user_id, "coin_win", payout, f"×{MULTIPLIER:.2f}")
         update_stats(user_id, True)
+        adjust_house_balance(-payout, user_id=user_id, reason="coinflip_player_win", game_ref="coinflip")
     else:
         update_stats(user_id, False)
+        adjust_house_balance(bet, user_id=user_id, reason="coinflip_player_loss", game_ref="coinflip")
 
     _record_match(user_id, bet, payout, int(win))
 
@@ -287,4 +302,6 @@ async def coin_flip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coin_verify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     await q.answer("Verification not implemented.", show_alert=True)

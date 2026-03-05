@@ -14,6 +14,8 @@ from telegram.ext import (
 
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,15 +153,18 @@ def save_session(user_id: int, bet: float, won: float, is_win: bool):
 async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry: show combinations page 1 with Start! button."""
     context.user_data["slots_page"] = 0
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         combos_text(0),
         reply_markup=combos_keyboard(),
         parse_mode=ParseMode.HTML
     )
+    set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
 
 async def next_combos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     page = context.user_data.get("slots_page", 0)
     context.user_data["slots_page"] = (page + 1) % 3
     await q.edit_message_text(
@@ -172,6 +177,8 @@ async def next_combos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def combos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Back from bet selector → show combinations again."""
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     page = context.user_data.get("slots_page", 0)
     await q.edit_message_text(
         combos_text(page),
@@ -183,6 +190,8 @@ async def combos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start! → open bet selector (like screenshot 4)."""
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     uid = q.from_user.id
     bal = get_balance(uid)
 
@@ -197,6 +206,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def bet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     uid = q.from_user.id
     bal = get_balance(uid)
     bet = context.user_data.get("slots_bet", MIN_BET)
@@ -249,6 +260,8 @@ def get_multiplier(v: int) -> float:
 async def spin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Deduct bet → roll 🎰 → pay winnings → show result + replay."""
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     user = q.from_user
     uid = user.id
 
@@ -270,9 +283,12 @@ async def spin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mult = get_multiplier(value)
     win_amt = round(bet * mult, 2) if mult > 0 else 0.0
 
-    # Payout
+    # Payout + house balance
     if win_amt > 0:
         update_balance(uid, win_amt)
+        adjust_house_balance(-win_amt, user_id=uid, reason="slots_player_win", game_ref="slots")
+    else:
+        adjust_house_balance(bet, user_id=uid, reason="slots_player_loss", game_ref="slots")
 
     # Persist session
     save_session(uid, bet, win_amt, win_amt > 0)
@@ -285,15 +301,19 @@ async def spin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{'🎉 You won' if win_amt > 0 else '😅 You lost'} <b>${win_amt:.2f}</b>"
     )
 
-    await q.message.reply_text(
+    result_msg = await q.message.reply_text(
         result_text,
         parse_mode=ParseMode.HTML,
         reply_markup=end_keyboard(bet, win_amt if win_amt > 0 else bet)
     )
+    # Register owner on the result message for replay/double buttons
+    set_owner(result_msg.chat_id, result_msg.message_id, uid)
 
 
 async def replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     _, _, amt = q.data.split(":", 2)
     try:
         bet = max(MIN_BET, float(amt))
@@ -309,6 +329,8 @@ async def replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q):
+        return
     _, _, amt = q.data.split(":", 2)
     try:
         payout = float(amt)

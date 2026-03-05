@@ -17,6 +17,8 @@ from telegram.ext import ContextTypes
 # ─── External balance & DB ─────────────────────────────────────────────────────
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 IMAGE_PATH = os.environ.get(
@@ -250,6 +252,9 @@ async def settle_round(update: Update, context: ContextTypes.DEFAULT_TYPE, st: R
 # add winnings if win
     if won_amt > 0:
         update_balance(user_id, won_amt)
+        adjust_house_balance(-won_amt, user_id=user_id, reason="roulette_player_win", game_ref="roulette")
+    else:
+        adjust_house_balance(bet, user_id=user_id, reason="roulette_player_loss", game_ref="roulette")
 
 # track wager
     add_wager(user_id, bet)
@@ -323,12 +328,14 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
                 reply_markup=root_kb(st),
             )
+            set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
         else:
             msg = await update.effective_chat.send_message(
                 caption,
                 parse_mode=ParseMode.HTML,
                 reply_markup=root_kb(st),
             )
+            set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
 
         st.message_id = msg.message_id
         return
@@ -355,6 +362,7 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=teaser_kb(),
     )
+    set_owner(msg.chat_id, msg.message_id, update.effective_user.id)
     st.message_id = msg.message_id
 
 
@@ -382,6 +390,9 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         data = unpack(q.data)
     except Exception:
         await q.answer("Invalid button.")
+        return
+
+    if not await check_owner(q, "❌ This is not your game."):
         return
 
     action = data.get("a")
