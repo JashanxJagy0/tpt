@@ -23,6 +23,8 @@ from telegram.ext import (
 
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─────────────────────────────────────────────────────────────────────────────
 #                             Helper‐Bot Setup
@@ -183,12 +185,15 @@ async def dart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_mode_keyboard()
     )
     dart_games[user.id]["msg_id"] = sent.message_id
+    set_owner(sent.chat_id, sent.message_id, user.id)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #                           Mode Selection
 # ─────────────────────────────────────────────────────────────────────────────
 async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     parts = q.data.split(":", 2)
     if len(parts) < 2 or parts[0] != DART_PREFIX or parts[1] != "mode":
@@ -197,7 +202,8 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = dart_games.get(user.id)
     if not state or state["stage"] != "mode":
-        return await q.edit_message_text("⚠ No game in progress.")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
 
     if value == "guide":
         return await q.edit_message_text(
@@ -212,6 +218,7 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     if value == "cancel":
+        remove_owner(q.message.chat_id, q.message.message_id)
         del dart_games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -227,6 +234,8 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     parts = q.data.split(":", 2)
     if len(parts) < 3 or parts[0] != DART_PREFIX or parts[1] != "points":
@@ -235,8 +244,10 @@ async def points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = dart_games.get(user.id)
     if not state or state["stage"] != "points":
-        return await q.edit_message_text("⚠ No game in progress.")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
     if pts not in (1,2,3):
+        remove_owner(q.message.chat_id, q.message.message_id)
         del dart_games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -259,6 +270,8 @@ async def points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     parts = q.data.split(":", 2)
     if len(parts) < 3 or parts[0] != DART_PREFIX or parts[1] != "confirm":
@@ -267,9 +280,11 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state  = dart_games.get(user.id)
     if not state or state["stage"]!="confirm":
-        return await q.edit_message_text("⚠ No game in progress.")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
 
     if choice!="yes":
+        remove_owner(q.message.chat_id, q.message.message_id)
         del dart_games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -312,6 +327,8 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def accept_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     parts = q.data.split(":", 2)
     if len(parts) < 3 or parts[0] != DART_PREFIX or parts[1] != "accept":
@@ -545,6 +562,9 @@ async def handle_user_throws(update: Update, context: ContextTypes.DEFAULT_TYPE)
         add_wager(uid, state["bet"])
         if winner == "user":
             update_balance(uid, payout)
+            adjust_house_balance(-payout, user_id=uid, reason="darts_player_win", game_ref="darts")
+        else:
+            adjust_house_balance(state["bet"], user_id=uid, reason="darts_player_loss", game_ref="darts")
 
         save_session(
             uid,
@@ -569,14 +589,15 @@ async def handle_user_throws(update: Update, context: ContextTypes.DEFAULT_TYPE)
             body = f"🤖 Bot wins <b>${bot_win_amt:.2f}</b>!"
             end_amt = bot_win_amt
 
-        await context.bot.send_message(
+        end_msg = await context.bot.send_message(
             chat_id=state["chat_id"],
             text=header + body,
             parse_mode="HTML",
             reply_to_message_id=state.get("last_user_dart_msg_id"),
             reply_markup=build_end_keyboard(state["bet"], end_amt)
         )
-
+        set_owner(end_msg.chat_id, end_msg.message_id, uid)
+        remove_owner(state["chat_id"], state["msg_id"])
         del dart_games[uid]
         return
 
@@ -642,6 +663,8 @@ async def handle_user_throws(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ─────────────────────────────────────────────────────────────────────────────
 async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     uid = q.from_user.id
     state = dart_games.get(uid)
     if not state or state["stage"] != "playing":
@@ -678,6 +701,7 @@ async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_balance(uid, -state["bet"])
         update_balance(uid, cash)
         add_wager(uid, state["bet"])
+        adjust_house_balance(state["bet"] - cash, user_id=uid, reason="darts_cashout", game_ref="darts")
         save_session(
             uid,
             f"{state['mode']}_{state['to_win']}_cashout",
@@ -703,6 +727,8 @@ async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     parts = q.data.split(":", 2)
     if len(parts) < 3 or parts[0] != DART_PREFIX or parts[1] != "replay":
         return
@@ -712,6 +738,8 @@ async def replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     parts = q.data.split(":", 2)
     if len(parts) < 3 or parts[0] != DART_PREFIX or parts[1] != "double":
         return

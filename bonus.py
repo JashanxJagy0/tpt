@@ -1,5 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from owner_guard import check_owner
 from datetime import datetime, timedelta
 import pytz
 import sqlite3
@@ -75,6 +76,8 @@ async def bonus_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
+        if not await check_owner(query, "❌ This is not your menu."):
+            return
         try:
             await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=keyboard)
         except Exception:
@@ -88,6 +91,8 @@ async def bonus_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def weekly_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await check_owner(query, "❌ This is not your bonus."):
+        return
 
     user = query.from_user
     user_id = user.id
@@ -138,6 +143,8 @@ async def weekly_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def claim_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await check_owner(query, "❌ This is not your bonus."):
+        return
 
     user_id = query.from_user.id
     has_boost = "bot" in (query.from_user.username or "").lower()
@@ -165,6 +172,8 @@ async def claim_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def try_to_double(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await check_owner(query, "❌ This is not your bonus."):
+        return
 
     user_id = query.from_user.id
     has_boost = "bot" in (query.from_user.username or "").lower()

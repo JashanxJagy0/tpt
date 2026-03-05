@@ -58,6 +58,8 @@ def payout_table(difficulty: str):
 # External app funcs (import from your project)
 from balance import get_balance, update_balance, add_wager
 from models import update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 
 # ─── State Helpers ────────────────────────────────────────────────────────
@@ -236,14 +238,17 @@ async def tower_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Bet: <b>${bet:.2f}</b>\n"
         f"Balance: <b>${bal:.2f}</b>"
     )
-    await update.message.reply_text(text, parse_mode="HTML",
+    msg = await update.message.reply_text(text, parse_mode="HTML",
                                     reply_markup=build_keyboard(context, finished=False, can_start=True))
+    set_owner(msg.chat_id, msg.message_id, user.id)
 
 
 # ─── Callbacks ───────────────────────────────────────────────────────────
 
 async def tower_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     bal = get_balance(q.from_user.id)
     bet = MIN_BET if bal >= MIN_BET else bal
     _set(context, "tower_bet", bet)
@@ -262,6 +267,8 @@ async def tower_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     text = (
         "<b>Monkey Tower Rules</b>\n\n"
         "• 🐒 Climb up the tree to increase the multiplier.\n"
@@ -275,6 +282,8 @@ async def tower_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_diff_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     names = [d for d, _, _ in DIFFICULTIES]
     idx = names.index(_difficulty(context))
     new = names[(idx - 1) % len(names)]
@@ -295,6 +304,8 @@ async def tower_diff_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_diff_right(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     names = [d for d, _, _ in DIFFICULTIES]
     idx = names.index(_difficulty(context))
     new = names[(idx + 1) % len(names)]
@@ -315,6 +326,8 @@ async def tower_diff_right(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     user = q.from_user
     bal = get_balance(user.id)
     bet = _bet(context)
@@ -336,6 +349,8 @@ async def tower_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     _, r_s, c_s = q.data.split(":")
     r, c = int(r_s), int(c_s)
     board = _board(context)
@@ -366,6 +381,8 @@ async def tower_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tower_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     row = _row(context)
     diff = _difficulty(context)
     bet = _bet(context)
@@ -385,11 +402,14 @@ async def _tower_end(update: Update, context: ContextTypes.DEFAULT_TYPE, win=Fal
         amount = round(bet * payout_table(diff)[-1], 2)
         update_balance(user_id, amount)
         update_stats(user_id, True)
+        adjust_house_balance(-amount, user_id=user_id, reason="tower_player_win", game_ref="tower")
         msg = f"🍌 Bananas! You won ${amount:.2f} ({payout_table(diff)[-1]:.2f}x)"
     elif snake:
         update_stats(user_id, False)
+        adjust_house_balance(bet, user_id=user_id, reason="tower_player_loss", game_ref="tower")
         msg = "🐍 You found the snake and lost."
     else:
+        adjust_house_balance(bet - cashout, user_id=user_id, reason="tower_cashout", game_ref="tower")
         msg = f"🎉 You won ${cashout:.2f} ({cashout/bet:.2f}x)"
 
     bal = get_balance(user_id)

@@ -23,6 +23,8 @@ from telegram.ext import (
 
 from balance import get_balance, update_balance, add_wager
 from models import get_connection, update_stats
+from housebal import adjust_house_balance
+from owner_guard import set_owner, check_owner, remove_owner
 
 # ─────────────────────────────────────────────────────────────────────────────
 #                             Helper‐Bot Setup
@@ -187,11 +189,7 @@ async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     games[user.id]["msg_id"] = sent.message_id
-async def check_owner(q, state):
-    if q.from_user.id != state["owner"]:
-        await q.answer("❌ This is not your game.", show_alert=True)
-        return False
-    return True
+    set_owner(sent.chat_id, sent.message_id, user.id)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #                           Mode Selection
@@ -201,17 +199,15 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     user  = q.from_user
+
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+
     data  = q.data.split(":", 1)[1]
     state = games.get(user.id)
 
     if not state or state["stage"] != "mode":
-        return await q.edit_message_text("⚠ No game in progress.")
-
-    state = games.get(user.id)
-    if not state or state["stage"] != "points":
-        return await q.edit_message_text("⚠ No game in progress.")
-
-    if not await check_owner(q, state):
+        await q.answer("⚠ No active game found.", show_alert=True)
         return
 
     if data == "guide":
@@ -227,6 +223,7 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     if data == "cancel":
+        remove_owner(q.message.chat_id, q.message.message_id)
         del games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -244,11 +241,17 @@ async def mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query; await q.answer()
     user  = q.from_user
+
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+
     pts   = int(q.data.split(":",1)[1])
     state = games.get(user.id)
     if not state or state["stage"] != "points":
-        return await q.edit_message_text("⚠ No game in progress.")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
     if pts not in (1,2,3):
+        remove_owner(q.message.chat_id, q.message.message_id)
         del games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -273,12 +276,18 @@ async def points_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query; await q.answer()
     user   = q.from_user
+
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+
     choice = q.data.split(":",1)[1]
     state  = games.get(user.id)
     if not state or state["stage"]!="confirm":
-        return await q.edit_message_text("⚠ No game in progress.")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
 
     if choice!="yes":
+        remove_owner(q.message.chat_id, q.message.message_id)
         del games[user.id]
         return await q.edit_message_text("❌ Game cancelled.")
 
@@ -328,10 +337,15 @@ async def accept_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query
     await q.answer()
     user   = q.from_user
+
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+
     choice = q.data.split(":",1)[1]
     state  = games.get(user.id)
     if not state or state["stage"]!="accept":
-        return await q.edit_message_text("⚠ No game in progress.", parse_mode="HTML")
+        await q.answer("⚠ No active game found.", show_alert=True)
+        return
 
     state["player1"]   = user.id
     state["player2"]   = user.id if choice=="yes" else "bot"
@@ -564,6 +578,9 @@ async def handle_user_rolls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_wager(uid, state["bet"])
         if winner == "user":
             update_balance(uid, payout)
+            adjust_house_balance(-payout, user_id=uid, reason="dice_player_win", game_ref="dice")
+        else:
+            adjust_house_balance(state["bet"], user_id=uid, reason="dice_player_loss", game_ref="dice")
 
         save_session(
             uid,
@@ -588,14 +605,15 @@ async def handle_user_rolls(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = f"🤖 Bot wins <b>${bot_win_amt:.2f}</b>!"
             end_amt = bot_win_amt
 
-        await context.bot.send_message(
+        end_msg = await context.bot.send_message(
             chat_id=state["chat_id"],
             text=header + body,
             parse_mode="HTML",
             reply_to_message_id=state.get("last_user_dice_msg_id"),
             reply_markup=build_end_keyboard(state["bet"], end_amt)
         )
-
+        set_owner(end_msg.chat_id, end_msg.message_id, uid)
+        remove_owner(state["chat_id"], state["msg_id"])
         del games[uid]
         return
 
@@ -665,6 +683,10 @@ async def handle_user_rolls(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query; await q.answer()
+
+    if not await check_owner(q, "❌ This is not your game."):
+        return
+
     uid   = q.from_user.id
     state = games.get(uid)
     if not state or state["stage"] != "playing":
@@ -704,6 +726,7 @@ async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_balance(uid, -state["bet"])
         update_balance(uid, cash)
         add_wager(uid, state["bet"])
+        adjust_house_balance(state["bet"] - cash, user_id=uid, reason="dice_cashout", game_ref="dice")
         save_session(
             uid,
             f"{state['mode']}_{state['to_win']}_cashout",
@@ -730,12 +753,16 @@ async def action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def replay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     bet = safe_parse_float(q.data.split(":",1)[1])
     context.args = [str(bet)]
     await dice_command(update, context)
 
 async def double_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query; await q.answer()
+    if not await check_owner(q, "❌ This is not your game."):
+        return
     payout = safe_parse_float(q.data.split(":",1)[1])
     context.args = [str(payout)]
     await dice_command(update, context)
